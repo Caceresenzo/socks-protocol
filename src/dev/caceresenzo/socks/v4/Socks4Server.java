@@ -4,6 +4,7 @@ import java.io.DataInputStream;
 import java.io.DataOutputStream;
 import java.io.IOException;
 import java.net.ConnectException;
+import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
@@ -22,10 +23,11 @@ public class Socks4Server implements Runnable, AutoCloseable {
 	private boolean running;
 
 	public Socks4Server(int port) throws IOException {
-		this.serverSocket = new ServerSocket(port);
-		this.serverSocket.setReuseAddress(true);
+		serverSocket = new ServerSocket(port);
+		serverSocket.setReuseAddress(true);
 
-		this.running = true;
+		running = true;
+
 		Thread.startVirtualThread(this);
 	}
 
@@ -46,7 +48,7 @@ public class Socks4Server implements Runnable, AutoCloseable {
 
 	@Override
 	public void close() throws IOException {
-		this.running = false;
+		running = false;
 
 		serverSocket.close();
 	}
@@ -61,11 +63,29 @@ public class Socks4Server implements Runnable, AutoCloseable {
 				return;
 			}
 
-			final var command = CommandCode.valueOf(dataInputStream.readByte());
+			final var commandValue = dataInputStream.readByte();
+			final var command = CommandCode.valueOf(commandValue);
+			if (command == null) {
+				reply(client, ReplyCode.REQUEST_REJECTED_OR_FAILED, "invalid command: %x".formatted(commandValue));
+				return;
+			}
+
 			final var destinationPort = dataInputStream.readPort();
-			final var destinationIp = dataInputStream.readInet4Address();
-			final var destination = new InetSocketAddress(destinationIp, destinationPort);
+			final var destinationIp = dataInputStream.readNBytes(4);
 			final var id = dataInputStream.readNullTerminatedString();
+
+			InetAddress destinationAddress = null;
+
+			final var is4a = destinationIp[0] == 0 && destinationIp[1] == 0 && destinationIp[2] == 0;
+			if (is4a) {
+				final var destinationHost = dataInputStream.readNullTerminatedString();
+
+				destinationAddress = InetAddress.getByName(destinationHost);
+			} else {
+				destinationAddress = InetAddress.getByAddress(destinationIp);
+			}
+
+			final var destination = new InetSocketAddress(destinationAddress, destinationPort);
 
 			System.out.format("[%s] DO %s TO [%s] AUTH [%s]%n", client.getInetAddress(), command, destination, id);
 

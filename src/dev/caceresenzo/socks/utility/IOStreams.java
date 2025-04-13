@@ -3,7 +3,6 @@ package dev.caceresenzo.socks.utility;
 import java.io.DataInputStream;
 import java.io.IOException;
 import java.net.Inet4Address;
-import java.net.InetAddress;
 import java.net.Socket;
 
 import lombok.experimental.UtilityClass;
@@ -15,10 +14,10 @@ public class IOStreams {
 		return input.readUnsignedShort();
 	}
 
-	public static InetAddress readInet4Address(DataInputStream input) throws IOException {
+	public static Inet4Address readInet4Address(DataInputStream input) throws IOException {
 		final var bytes = input.readNBytes(4);
 
-		return Inet4Address.getByAddress(bytes);
+		return (Inet4Address) Inet4Address.getByAddress(bytes);
 	}
 
 	public static String readNullTerminatedString(DataInputStream input) throws IOException {
