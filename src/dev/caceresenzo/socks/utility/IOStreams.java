@@ -10,6 +10,12 @@ import lombok.experimental.UtilityClass;
 @UtilityClass
 public class IOStreams {
 
+	public static byte[] readByteArray(DataInputStream input) throws IOException {
+		final var size = input.readUnsignedByte();
+
+		return input.readNBytes(size);
+	}
+
 	public static int readPort(DataInputStream input) throws IOException {
 		return input.readUnsignedShort();
 	}
