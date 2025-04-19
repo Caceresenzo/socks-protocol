@@ -9,7 +9,12 @@ import java.net.InetSocketAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.net.SocketAddress;
+import java.net.UnknownHostException;
 import java.nio.charset.StandardCharsets;
+import java.util.List;
+import java.util.Map;
+import java.util.function.Function;
+import java.util.stream.Collectors;
 
 import dev.caceresenzo.socks.utility.IOStreams;
 import dev.caceresenzo.socks.v4.CommandCode;
@@ -21,14 +26,21 @@ public class Socks5Server implements Runnable, AutoCloseable {
 	public static final int VERSION = 0x05;
 
 	private final ServerSocket serverSocket;
+	private final Map<Byte, Authenticator> authenticators;
 
 	private boolean running;
 
-	public Socks5Server(int port) throws IOException {
-		serverSocket = new ServerSocket(port);
-		serverSocket.setReuseAddress(true);
+	public Socks5Server(int port, List<Authenticator> authenticators) throws IOException {
+		this.serverSocket = new ServerSocket(port);
+		this.serverSocket.setReuseAddress(true);
 
-		running = true;
+		this.authenticators = authenticators.stream()
+			.collect(Collectors.toMap(
+				Authenticator::getMethod,
+				Function.identity()
+			));
+
+		this.running = true;
 
 		Thread.startVirtualThread(this);
 	}
@@ -60,29 +72,74 @@ public class Socks5Server implements Runnable, AutoCloseable {
 			final var input = new DataInputStream(client.getInputStream());
 			final var output = new DataOutputStream(client.getOutputStream());
 
-			var version = input.readByte();
-			if (VERSION != version) {
-				reply(client, ReplyCode.COMMAND_NOT_SUPPORTED_OR_PROTOCOL_ERROR, "invalid version: %x".formatted(version));
+			if (!readVersion(input, client)) {
 				return;
 			}
 
+			Authenticator authenticator = null;
+			Authenticator.Result result = null;
+
 			final var auth = input.readByteArray();
-			// TODO Auth
+			for (final var possibleAuthentication : auth) {
+				authenticator = authenticators.get(possibleAuthentication);
+				if (authenticator != null) {
+					output.writeByte(VERSION);
+					output.writeByte(authenticator.getMethod());
 
-			output.write(VERSION);
-			output.write(0x00 /* status: success */);
+					result = authenticator.authenticate(client);
+					break;
+				}
+			}
 
-			version = input.readByte();
-			final var command = CommandCode.valueOf(input.readByte());
-			input.readByte();
+			if (authenticator == null) {
+				output.writeByte(VERSION);
+				output.writeByte(0xff /* choice: no acceptable methods */);
+				return;
+			} else if (authenticator instanceof Authenticator.NoAuthentication) {
+				;
+			} else if (result.success()) {
+				output.writeByte(result.version());
+				output.writeByte(0x00 /* status: success */);
+			} else {
+				output.writeByte(result.version());
+				output.writeByte(0x01 /* status: failure */);
+				return;
+			}
+
+			if (!readVersion(input, client)) {
+				return;
+			}
+
+			final var commandValue = input.readByte();
+			final var command = CommandCode.valueOf(commandValue);
+			if (command == null) {
+				reply(client, ReplyCode.COMMAND_NOT_SUPPORTED_OR_PROTOCOL_ERROR, "invalid command: %x".formatted(commandValue));
+				return;
+			}
+
+			input.readByte(); /* reserved */
 
 			final var addressType = input.readByte();
 			final InetAddress destinationAddress = switch (addressType) {
 				case 0x01 -> InetAddress.getByAddress(input.readNBytes(4));
-				case 0x03 -> InetAddress.getByName(new String(input.readByteArray(), StandardCharsets.US_ASCII));
+				case 0x03 -> {
+					final var host = new String(input.readByteArray(), StandardCharsets.US_ASCII);
+
+					try {
+						yield InetAddress.getByName(host);
+					} catch (UnknownHostException exception) {
+						reply(client, ReplyCode.HOST_UNREACHABLE, exception.getMessage());
+						yield null;
+					}
+				}
 				case 0x04 -> InetAddress.getByAddress(input.readNBytes(16));
 				default -> null;
 			};
+
+			if (destinationAddress == null) {
+				reply(client, ReplyCode.ADDRESS_TYPE_NOT_SUPPORTED, "invalid address type: %x".formatted(addressType));
+				return;
+			}
 
 			final var destinationPort = input.readPort();
 
@@ -94,6 +151,17 @@ public class Socks5Server implements Runnable, AutoCloseable {
 		} catch (IOException exception) {
 			exception.printStackTrace();
 		}
+	}
+
+	private boolean readVersion(DataInputStream input, Socket client) throws IOException {
+		var version = input.readByte();
+
+		if (VERSION != version) {
+			reply(client, ReplyCode.COMMAND_NOT_SUPPORTED_OR_PROTOCOL_ERROR, "invalid version: %x".formatted(version));
+			return false;
+		}
+
+		return true;
 	}
 
 	private void proxy(Socket client, SocketAddress destinationAddress) throws IOException {
@@ -114,6 +182,10 @@ public class Socks5Server implements Runnable, AutoCloseable {
 	}
 
 	public void reply(Socket client, ReplyCode code, String errorMessage) throws IOException {
+		if (client.isClosed()) {
+			return;
+		}
+
 		final var output = new DataOutputStream(client.getOutputStream());
 
 		output.writeByte(VERSION);
