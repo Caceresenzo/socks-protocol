@@ -58,11 +58,11 @@ public interface Authenticator {
 
 			final var version = input.readByte();
 
-			final var id = new String(input.readByteArray(), StandardCharsets.US_ASCII);
+			final var username = new String(input.readByteArray(), StandardCharsets.US_ASCII);
 			final var password = input.readByteArray();
 
 			try {
-				final var success = predicate.test(id, password);
+				final var success = predicate.test(username, password);
 
 				return new Result(success, version);
 			} finally {

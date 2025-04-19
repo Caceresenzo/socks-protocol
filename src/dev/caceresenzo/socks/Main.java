@@ -12,8 +12,8 @@ public class Main {
 	public static void main(String[] args) throws IOException, InterruptedException {
 		final var authenticators = List.<Authenticator>of(
 			Authenticator.noAuthentication(),
-			Authenticator.usernamePassword((id, password) -> {
-				System.out.println("trying to auth %s@%s".formatted(id, new String(password)));
+			Authenticator.usernamePassword((username, password) -> {
+				System.out.println("trying to auth %s@%s".formatted(username, new String(password)));
 				return true;
 			})
 		);
